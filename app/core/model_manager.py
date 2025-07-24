@@ -48,19 +48,28 @@ class ModelPool:
 
     def _create_degirum_model(self):
         """使用配置中的信息加载单个 DeGirum 模型实例。"""
+
+        # 修正点 1：在 load_model 调用中移除阈值参数
         model = dg.load_model(
             model_name=self.settings.hailo.detection_model_name,
             inference_host_address=dg.LOCAL,
             zoo_url=self.settings.hailo.zoo_url,
-            image_backend='opencv',
-            confidence_threshold=self.settings.hailo.confidence_threshold,
-            nms_threshold=self.settings.hailo.iou_threshold
+            image_backend='opencv'
         )
         if not model:
             raise ConnectionError("dg.load_model 返回 None，无法加载模型。")
+
+        # 在模型加载后，将其作为对象属性进行设置
+        # 这种模式更符合Pythonic的风格，即将对象创建和配置分离
+        try:
+            model.confidence_threshold = self.settings.hailo.confidence_threshold
+            # 注意：属性名通常是 'nms_threshold' 而不是 'iou_threshold'
+            model.nms_threshold = self.settings.hailo.iou_threshold
+        except Exception as e:
+            app_logger.error(f"设置模型推理参数时出错: {e}。将使用模型的默认阈值。")
+
         return model
 
-    # 修正点：将返回类型提示改为更通用的 object
     def acquire(self, timeout: float = 2.0) -> Optional[object]:
         """从池中获取一个模型实例。如果池为空，将等待指定时间。"""
         try:
