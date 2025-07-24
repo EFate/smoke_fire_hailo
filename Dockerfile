@@ -55,3 +55,4 @@ RUN chmod +x start.sh
 # --- Stage 6: 配置容器运行 ---
 EXPOSE 12020
 EXPOSE 12021
+CMD ["./start.sh"]
