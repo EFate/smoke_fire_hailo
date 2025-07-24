@@ -36,7 +36,6 @@ def cleanup_degirum_workers_by_pids(pids_to_kill: Set[int], logger: Logger):
     for pid in pids_to_kill:
         try:
             # 使用SIGKILL信号强制、立即终止进程
-            # 在Linux/macOS上，这是最可靠的强制退出方式
             os.kill(pid, signal.SIGKILL)
             logger.info(f"【进程清理】已向PID {pid} 发送SIGKILL信号。")
             killed_count += 1

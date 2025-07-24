@@ -2,32 +2,34 @@
 import asyncio
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Any
 
 from fastapi import HTTPException, status
 
 from app.cfg.config import AppSettings
 from app.cfg.logging import app_logger
+from app.core.model_manager import ModelPool
 from app.core.pipeline import VideoStreamPipeline
 from app.schema.detection_schema import ActiveStreamInfo, StreamStartRequest
-
-from app.core.model_manager import model_pool
 
 
 class DetectionService:
     """
-    封装核心业务逻辑的服务类，持有对 ModelPool 的引用。
+    封装核心业务逻辑的服务类 (Hailo版)。
     职责：
-    1. 作为 VideoStreamPipeline 实例的工厂和管理者。
-    2. 维护活动流的状态，处理API请求。
-    3. 协调应用的生命周期（启动、停止、清理）。
+    1. 管理 VideoStreamPipeline 实例的生命周期。
+    2. 注入模型池，使流水线能够共享硬件资源。
+    3. 维护活动流的状态，处理API请求。
     """
 
-    def __init__(self, settings: AppSettings):
-        app_logger.info("正在初始化 DetectionService (适配 Hailo)...")  # 更新日志信息
+    def __init__(self, settings: AppSettings, model_pool: ModelPool):
+        app_logger.info("正在初始化 DetectionService (Hailo版)...")
         self.settings = settings
-        self.model_pool = model_pool  # 直接引用 ModelPool 单例
+        self.model_pool = model_pool
+        # active_streams 现在存储 pipeline 对象本身，以便调用其方法
         self.active_streams: Dict[str, VideoStreamPipeline] = {}
+        # 存储流的元数据，方便查询
+        self.stream_infos: Dict[str, ActiveStreamInfo] = {}
         self.stream_lock = asyncio.Lock()
 
     async def start_stream(self, req: StreamStartRequest) -> ActiveStreamInfo:
@@ -35,31 +37,26 @@ class DetectionService:
         stream_id = str(uuid.uuid4())
         lifetime = req.lifetime_minutes if req.lifetime_minutes is not None else self.settings.app.stream_default_lifetime_minutes
 
-        app_logger.info(f"准备为流 {stream_id} 启动一个新的视频流处理流水线 (它将从模型池中获取模型)...")
-
         async with self.stream_lock:
-            if stream_id in self.active_streams:
-                raise HTTPException(status_code=409, detail="Stream ID conflict.")
-
             # 1. 创建Web端消费的异步队列
             frame_queue = asyncio.Queue(maxsize=self.settings.app.stream_max_queue_size)
 
-            # 2. 实例化完整的处理流水线
+            # 2. 实例化流水线，并注入模型池
             pipeline = VideoStreamPipeline(
                 settings=self.settings,
                 stream_id=stream_id,
                 video_source=req.source,
-                output_queue=frame_queue
+                output_queue=frame_queue,
+                model_pool=self.model_pool
             )
 
-            # 3. 在线程池中启动流水线（这是一个阻塞操作）
-            loop = asyncio.get_running_loop()
-            try:
-                # pipeline.start() 内部会 acquire 模型
-                await loop.run_in_executor(None, pipeline.start)
-            except Exception as e:
-                app_logger.error(f"启动视频流 {stream_id} 失败: {e}", exc_info=True)
-                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"无法启动视频流：{e}")
+            # 3. 启动流水线线程
+            pipeline.start()
+
+            # 短暂等待以确认线程是否因为无法获取模型等原因立即失败
+            await asyncio.sleep(0.2)
+            if not pipeline.thread or not pipeline.thread.is_alive():
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "服务正忙或无法启动处理线程，请稍后再试。")
 
             # 4. 记录新流的信息
             self.active_streams[stream_id] = pipeline
@@ -67,24 +64,22 @@ class DetectionService:
             expires_at = None if lifetime == -1 else started_at + timedelta(minutes=lifetime)
             stream_info = ActiveStreamInfo(stream_id=stream_id, source=req.source, started_at=started_at,
                                            expires_at=expires_at, lifetime_minutes=lifetime)
+            self.stream_infos[stream_id] = stream_info
 
-            setattr(pipeline, 'info', stream_info)  # 记录 info 到 pipeline 对象上
-
-            app_logger.info(f"🚀 视频流处理流水线已启动: ID={stream_id}, 源={req.source}")
+            app_logger.info(f"🚀 视频流处理线程已启动: ID={stream_id}, 源={req.source}")
             return stream_info
 
     async def stop_stream(self, stream_id: str) -> bool:
         """停止一个指定的视频流。"""
         async with self.stream_lock:
             pipeline = self.active_streams.pop(stream_id, None)
+            _ = self.stream_infos.pop(stream_id, None)
             if not pipeline:
                 app_logger.warning(f"尝试停止一个不存在或已被停止的流: {stream_id}")
                 return False
 
-        # 在线程池中停止流水线（这是一个阻塞操作），pipeline.stop() 内部会 release 模型
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, pipeline.stop)
-
+        # 在当前协程中请求停止（内部会join线程）
+        pipeline.stop()
         app_logger.info(f"✅ 视频流流水线已请求停止: ID={stream_id}")
         return True
 
@@ -100,50 +95,49 @@ class DetectionService:
         frame_queue = pipeline.output_queue
         try:
             while True:
-                # 阻塞获取帧，直到有帧可用或收到终止信号
-                frame_bytes = await frame_queue.get()
-                if frame_bytes is None:
-                    app_logger.info(f"接收到流 {stream_id} 的终止信号，正常关闭推送。")
+                # 检查流水线线程是否还在运行
+                if not pipeline.thread.is_alive() and frame_queue.empty():
+                    app_logger.info(f"检测到流 {stream_id} 的后台线程已停止，正常关闭推送。")
                     break
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                frame_queue.task_done()
+
+                try:
+                    frame_bytes = await asyncio.wait_for(frame_queue.get(), timeout=1.0)
+                    if frame_bytes is None:
+                        break  # 收到结束信号
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                    frame_queue.task_done()
+                except asyncio.TimeoutError:
+                    continue  # 超时是正常的，继续等待下一帧
+
         except asyncio.CancelledError:
             app_logger.info(f"客户端从流 {stream_id} 断开，将自动停止该流。")
-            await self.stop_stream(stream_id)  # 客户端断开时自动停止流
+            await self.stop_stream(stream_id)
             raise
-        except Exception as e:
-            app_logger.error(f"获取流 {stream_id} 馈送时发生错误: {e}", exc_info=True)
-            await self.stop_stream(stream_id)  # 发生错误时停止流
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="流处理异常，已停止。")
 
     async def get_all_active_streams_info(self) -> List[ActiveStreamInfo]:
         """获取所有当前活动流的信息列表。"""
         async with self.stream_lock:
-            # 过滤掉没有 info 属性的（理论上不应该有）或者线程已死的管道
-            active_pipelines = [p for p in self.active_streams.values() if
-                                hasattr(p, 'info') and (p.threads and p.threads[0].is_alive())]
-            return [getattr(p, 'info') for p in active_pipelines]
+            # 清理已经意外死掉的流
+            dead_stream_ids = [sid for sid, p in self.active_streams.items() if not p.thread.is_alive()]
+            for sid in dead_stream_ids:
+                self.active_streams.pop(sid, None)
+                self.stream_infos.pop(sid, None)
+                app_logger.warning(f"检测并清理了一个意外终止的流: {sid}")
+
+            return list(self.stream_infos.values())
 
     async def cleanup_expired_streams(self):
         """[后台任务] - 定期检查并清理所有已过期的视频流。"""
         while True:
             await asyncio.sleep(self.settings.app.stream_cleanup_interval_seconds)
             now = datetime.now()
-            expired_stream_ids = []
-            async with self.stream_lock:
-                # 遍历 active_streams 的副本，以避免在迭代时修改字典
-                for stream_id, pipeline in list(self.active_streams.items()):
-                    info = getattr(pipeline, 'info', None)
-                    # 检查流是否过期，或者管道线程是否已意外停止
-                    if (info and info.expires_at and now >= info.expires_at) or \
-                            (pipeline.threads and not pipeline.threads[
-                                0].is_alive() and not pipeline.stop_event.is_set()):
-                        app_logger.warning(f"检测到流 {stream_id} 过期或已意外停止，准备清理。")
-                        expired_stream_ids.append(stream_id)
+            # 创建副本以避免在迭代时修改字典
+            streams_to_check = list(self.stream_infos.items())
+            expired_stream_ids = [sid for sid, info in streams_to_check if info.expires_at and now >= info.expires_at]
 
             if expired_stream_ids:
-                app_logger.info(f"🗑️ 发现 {len(expired_stream_ids)} 个过期/异常视频流，正在清理: {expired_stream_ids}")
+                app_logger.info(f"🗑️ 发现 {len(expired_stream_ids)} 个过期视频流，正在清理: {expired_stream_ids}")
                 cleanup_tasks = [self.stop_stream(stream_id) for stream_id in expired_stream_ids]
                 await asyncio.gather(*cleanup_tasks)
 
