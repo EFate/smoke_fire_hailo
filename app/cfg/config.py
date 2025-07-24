@@ -31,13 +31,14 @@ FilePath = Annotated[Path, BeforeValidator(lambda v: Path(v) if isinstance(v, st
 class AppConfig(BaseModel):
     """应用通用配置"""
     title: str = "高性能烟火检测服务"
-    description: str = "基于FastAPI和YOLO ONNX模型构建的实时烟火检测服务"
+    description: str = "基于FastAPI和YOLO Hailo模型构建的实时烟火检测服务" # 描述更新
     version: str = "1.0.0"
     debug: bool = False
     stream_default_lifetime_minutes: int = Field(10, description="视频流默认生命周期（分钟），-1表示永久")
     stream_cleanup_interval_seconds: int = Field(60, description="后台清理过期视频流的运行间隔（秒）")
     stream_recognition_interval_seconds: float = Field(0.1, description="视频流中执行检测的最小间隔（秒），即1/FPS")
     stream_max_queue_size: int = Field(120, description="为视频流提供一个更充裕的缓冲区，以应对客户端网络抖动")
+    hailo_model_pool_size: int = Field(3, description="Hailo模型池中的模型实例数量，控制并发推理能力。")
 
 
 class ServerConfig(BaseModel):
@@ -63,19 +64,16 @@ class LoggingConfig(BaseModel):
 
 class YoloConfig(BaseModel):
     """YOLO模型与推理配置"""
-    model_path: FilePath = DATA_DIR / "models" / "best.onnx"
+    model_path: FilePath = DATA_DIR / "zoo" / "yolov8n_relu6_fire_smoke--640x640_quant_hailort_hailo8_1"
     class_names: List[str] = ["fire", "smoke"]
-    providers: List[str] = Field(
-        default=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        description="ONNX Runtime 执行提供者列表（按优先级排列）。程序会自动检测并使用可用的最佳提供者。"
-    )
     confidence_threshold: float = Field(0.5, ge=0.0, le=1.0, description="目标检测置信度阈值")
     iou_threshold: float = Field(0.4, ge=0.0, le=1.0, description="非极大值抑制（NMS）的IOU阈值")
 
     @model_validator(mode='after')
     def ensure_model_dir_exists(self) -> 'YoloConfig':
         """验证后执行，确保模型文件所在的目录存在。"""
-        self.model_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.model_path.is_dir():
+             raise ValueError(f"DeGirum模型目录未找到: {self.model_path}。请确保模型目录存在于指定路径。")
         return self
 
 

@@ -3,14 +3,17 @@ import asyncio
 import queue
 import threading
 import time
-from typing import List
+from typing import List, Tuple, Any  # 导入 Any 用于 Degirum 模型结果
 
 import cv2
-import onnxruntime as ort
+import numpy as np
 
 from app.cfg.config import AppSettings
 from app.cfg.logging import app_logger
-from app.core.model_manager import model_manager
+
+from app.core.model_manager import model_pool
+
+from degirum_tools.inference_models import Model
 from app.core.processing import preprocess, postprocess, draw_detections
 
 
@@ -27,10 +30,9 @@ class VideoStreamPipeline:
         self.video_source = video_source
         self.output_queue = output_queue  # (Asyncio) 用于将最终结果发送给Web端
 
-        # --- 从 ModelManager 获取共享的模型资源 ---
-        self.session: ort.InferenceSession = model_manager.get_session()  #
-        self.input_shape: tuple[int, int] = model_manager.get_input_shape()  #
-        self.input_name: str = self.session.get_inputs()[0].name  #
+
+        self.model: Optional[Model] = None  # DeGirum 模型实例
+        self.input_shape: tuple[int, int] = model_pool.get_input_shape()  # 仍然从 model_pool 获取输入形状
 
         # --- 为流水线创建三个同步缓冲区队列 ---
         self.preprocess_queue = queue.Queue(maxsize=32)
@@ -46,6 +48,12 @@ class VideoStreamPipeline:
         """启动所有流水线工作线程。"""
         app_logger.info(f"【流水线 {self.stream_id}】正在启动...")
         try:
+            # ❗【新增】从模型池获取模型
+            self.model = model_pool.acquire()
+            if self.model is None:
+                raise RuntimeError("无法从模型池获取 DeGirum 模型实例。")
+            app_logger.info(f"【流水线 {self.stream_id}】已从模型池获取模型。")
+
             self._start_threads()
             app_logger.info(f"✅【流水线 {self.stream_id}】所有线程已启动。")
         except Exception as e:
@@ -81,6 +89,12 @@ class VideoStreamPipeline:
         except asyncio.QueueFull:
             pass
 
+
+        if self.model:
+            model_pool.release(self.model)
+            self.model = None  # 清除引用
+            app_logger.info(f"【流水线 {self.stream_id}】已将模型归还到池中。")
+
         app_logger.info(f"✅【流水线 {self.stream_id}】已安全停止。")
 
     def _start_threads(self):
@@ -114,10 +128,10 @@ class VideoStreamPipeline:
 
             # --- START: 保证处理最新帧的关键逻辑 ---
             # 策略：始终保持队列最新。如果队列满了，就丢弃最旧的帧，放入新帧。
-            if self.preprocess_queue.full():  #
+            if self.preprocess_queue.full():
                 try:
                     # 队列已满，非阻塞地取出一个元素（最旧的帧）以丢弃
-                    self.preprocess_queue.get_nowait()  #
+                    self.preprocess_queue.get_nowait()
                 except queue.Empty:
                     # 在多线程的竞争条件下，可能刚判断完full()队列就被消费了，这是正常情况。
                     pass
@@ -125,7 +139,6 @@ class VideoStreamPipeline:
             # 将新帧放入队列。因为我们已确保有空间，所以这里可以安全地使用put。
             self.preprocess_queue.put(frame)
             time.sleep(0.01)
-
 
         self.preprocess_queue.put(None)  # 发送结束信号
         app_logger.info(f"【读帧线程 {self.stream_id}】已停止。")
@@ -140,13 +153,20 @@ class VideoStreamPipeline:
                     self.inference_queue.put(None)  # 传递结束信号
                     break
 
-                input_tensor, scale, dw, dh = preprocess(frame, self.input_shape)
+                # DeGirum模型通常直接接收原始图像，其内部处理预处理
+                # 但为了兼容processing.py的后处理逻辑，我们仍计算scale, dw, dh
+                # 实际传递给 Degirum model.predict() 的是原始图像 frame
+                # 这里仍然调用preprocess来获取scale, dw, dh，但input_tensor可能不直接用于degirum模型
+                input_tensor, scale, dw, dh = preprocess(frame, self.input_shape)  #
 
-                # 将处理所需的所有数据打包放入下一队列
-                self.inference_queue.put((frame, input_tensor, scale, dw, dh))
+                # 将原始帧和预处理参数打包放入下一队列
+                self.inference_queue.put((frame, scale, dw, dh))
 
             except queue.Empty:
                 continue
+            except Exception as e:
+                app_logger.error(f"【预处理线程 {self.stream_id}】发生错误: {e}", exc_info=True)
+                break  # 发生错误时退出线程
         app_logger.info(f"【预处理线程 {self.stream_id}】已停止。")
 
     def _inference_thread(self):
@@ -159,16 +179,25 @@ class VideoStreamPipeline:
                     self.postprocess_queue.put(None)  # 传递结束信号
                     break
 
-                original_frame, input_tensor, scale, dw, dh = data
+                original_frame, scale, dw, dh = data  # ❗【修改】不再接收 input_tensor
 
-                # 执行阻塞的 session.run()
-                outputs = self.session.run(None, {self.input_name: input_tensor})  #
+                if self.model is None:
+                    app_logger.error(f"【推理线程 {self.stream_id}】模型未加载，无法执行推理。")
+                    break
 
-                # 将原始帧和推理结果一同传递
-                self.postprocess_queue.put((original_frame, outputs[0], scale, dw, dh))
+                # 执行 DeGirum 模型的推理
+                # DeGirum model.predict() 直接接受 OpenCV 格式的 np.ndarray 图像
+                inference_results = self.model.predict(original_frame)
+                # print(f"DeGirum Inference Results: {inference_results}") # Debugging
+
+                # 将原始帧、DeGirum 结果和预处理参数一同传递
+                self.postprocess_queue.put((original_frame, inference_results, scale, dw, dh))
 
             except queue.Empty:
                 continue
+            except Exception as e:
+                app_logger.error(f"【推理线程 {self.stream_id}】发生错误: {e}", exc_info=True)
+                break  # 发生错误时退出线程
         app_logger.info(f"【推理线程 {self.stream_id}】已停止。")
 
     def _postprocessor_thread(self):
@@ -182,29 +211,74 @@ class VideoStreamPipeline:
                     break  # 收到结束信号，退出循环
 
                 current_time = time.time()
-                if current_time - last_rec_time < self.settings.app.stream_recognition_interval_seconds:  #
+                # 控制后处理的频率，避免过快刷新
+                if current_time - last_rec_time < self.settings.app.stream_recognition_interval_seconds:
+                    # 如果未到间隔时间，将数据重新放回队列头部（如果队列允许，否则丢弃）
+                    # 更好的做法是直接跳过处理，不放回队列
                     continue
                 last_rec_time = current_time
 
-                original_frame, outputs, scale, dw, dh = data
+                # 接收 DeGirum 的推理结果
+                original_frame, inference_results, scale, dw, dh = data
 
-                boxes, scores, class_ids = postprocess(
-                    outputs, scale, dw, dh,
+                # 适配 postprocess 函数以处理 DeGirum 的结果
+                # DeGirum 模型的 predict 方法通常返回一个包含 'results' 键的字典列表，
+                # 每个结果字典包含 'bbox', 'score', 'label' 等。
+                # 需要将 DeGirum 的结果转换为 postprocess 函数期望的 (boxes, scores, class_ids) 格式
+
+                boxes_list = []
+                scores_list = []
+                class_ids_list = []
+
+                # Degirum模型返回的results通常是一个列表，每个元素代表一个检测到的对象
+                # 每个对象是一个字典，包含'bbox'、'score'、'label'
+                if inference_results and hasattr(inference_results, 'results') and inference_results.results:
+                    for det_obj in inference_results.results:  # 假设 Degirum 返回的 results 对象有 .results 属性
+                        # Degirum的bbox已经是 [x1, y1, x2, y2] 形式
+                        bbox = det_obj.get('bbox')
+                        score = det_obj.get('score')
+                        label = det_obj.get('label')
+
+                        if bbox and score is not None and label is not None:
+                            boxes_list.append(bbox)
+                            scores_list.append(score)
+                            # 将类别名称映射为ID
+                            try:
+                                class_id = self.yolo_settings.class_names.index(label)
+                                class_ids_list.append(class_id)
+                            except ValueError:
+                                app_logger.warning(f"未知类别名称: {label}")
+                                continue
+
+                boxes = np.array(boxes_list) if boxes_list else np.array([])
+                scores = np.array(scores_list) if scores_list else np.array([])
+                class_ids = np.array(class_ids_list) if class_ids_list else np.array([])
+
+                # DeGirum 模型直接输出原始图像坐标系的 bbox。
+                # `postprocess` 函数现在只做 NMS 过滤
+                boxes_final, scores_final, class_ids_final = postprocess(
+                    boxes, scores, class_ids,  # ❗【修改】只传递已经处理过的检测结果
                     self.yolo_settings.confidence_threshold,
-                    self.yolo_settings.iou_threshold
-                )  #
+                    self.yolo_settings.iou_threshold,
+                    # DeGirum 模型输出已经是原始图像尺寸，不再需要这些参数进行反变换，但函数签名需要匹配
+                    scale=1.0, dw=0, dh=0  # 占位符，实际不再用于反变换
+                )
+
                 result_frame = draw_detections(
-                    original_frame, boxes, scores, class_ids, self.yolo_settings.class_names
-                )  #
+                    original_frame, boxes_final, scores_final, class_ids_final, self.yolo_settings.class_names
+                )
 
                 # 编码并放入最终的异步输出队列
-                (flag, encodedImage) = cv2.imencode(".jpg", result_frame)  #
+                (flag, encodedImage) = cv2.imencode(".jpg", result_frame)
                 if flag:
                     try:
-                        self.output_queue.put_nowait(encodedImage.tobytes())  #
+                        self.output_queue.put_nowait(encodedImage.tobytes())
                     except asyncio.QueueFull:
-                        pass
+                        pass  # 队列满时丢弃帧
 
             except queue.Empty:
                 continue
+            except Exception as e:
+                app_logger.error(f"【后处理线程 {self.stream_id}】发生错误: {e}", exc_info=True)
+                break  # 发生错误时退出线程
         app_logger.info(f"【后处理线程 {self.stream_id}】已停止。")

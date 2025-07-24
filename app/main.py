@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.cfg.config import get_app_settings
 from app.cfg.logging import app_logger, setup_logging
-from app.core.model_manager import load_models_on_startup, release_models_on_shutdown
+
+from app.core.model_manager import model_pool, load_degirum_models_on_startup, dispose_degirum_models_on_shutdown
 from app.router.detection_router import router as detection_router
 from app.schema.detection_schema import ApiResponse
 from app.service.detection_service import DetectionService
@@ -32,13 +33,14 @@ async def lifespan(app: FastAPI):
     # --- 启动任务 ---
     app_logger.info("🚀 应用启动中...")
 
-    # 1. 加载 ONNX 模型。这是一个耗时的I/O和计算密集型任务，必须在服务接收请求前完成。
-    await load_models_on_startup()
+    # 1. ❗【修改】加载 DeGirum 模型池。
+    await load_degirum_models_on_startup()
 
     # 2. 初始化核心服务。
     #    将配置和服务实例附加到 app.state，这是一种在 FastAPI 应用中共享单例对象的标准做法。
     #    所有请求处理函数都可以通过 `request.app.state` 访问到这些实例。
     app.state.settings = settings
+    # 将 model_pool 注入到 DetectionService (DetectionService内部直接引用了model_pool单例，这里不再显式注入)
     detection_service = DetectionService(settings=settings)
     app.state.detection_service = detection_service
     app_logger.info("✅ 检测服务 (DetectionService) 初始化完成。")
@@ -72,8 +74,8 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, 'detection_service'):
         await app.state.detection_service.stop_all_streams()
 
-    # 3. 释放模型资源，主要是卸载ONNX会话，释放显存/内存。
-    await release_models_on_shutdown()
+    # 3. 释放 DeGirum 模型资源和清理相关进程。
+    await dispose_degirum_models_on_shutdown()
     app_logger.info("✅ 所有关闭任务已完成。应用已安全退出。")
 
 

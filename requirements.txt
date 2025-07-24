@@ -1,9 +1,8 @@
 fastapi[standard]
 loguru
-onnx>=1.18.0
-onnxruntime-gpu>=1.22.0
 opencv-python
 pydantic-settings
 pyyaml
 streamlit
 typer
+psutil
