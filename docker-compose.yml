@@ -28,6 +28,7 @@ services:
     environment:
       - HOST__IP=${HOST__IP}
       - SERVER__PORT=${SERVER__PORT}
+      - WEBUI__PORT=${WEBUI__PORT}
 
 
     # 重启策略: 除非手动停止，否则容器总是在退出后重启
