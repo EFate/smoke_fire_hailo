@@ -8,6 +8,7 @@ from fastapi.exceptions import HTTPException
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.cfg.config import get_app_settings
 from app.cfg.logging import app_logger, setup_logging
@@ -17,7 +18,7 @@ from app.router.detection_router import router as detection_router
 from app.router.device_router import router as device_router
 from app.schema.detection_schema import ApiResponse
 from app.service.detection_service import DetectionService
-from app.service.device_monitor import DeviceMonitor
+
 
 settings = get_app_settings()
 setup_logging(settings)
@@ -48,10 +49,6 @@ async def lifespan(app: FastAPI):
     app.state.cleanup_task = cleanup_task
     app_logger.info("✅ 已启动过期视频流的周期性清理任务。")
 
-    # 4. 启动设备监控服务
-    device_monitor = DeviceMonitor()
-    device_monitor.start()
-
     app_logger.info("🎉 应用启动成功，准备接收请求！")
 
     yield
@@ -77,8 +74,6 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, 'model_pool'):
         app.state.model_pool.dispose()
 
-    # 4. 关闭设备监控服务
-    device_monitor.stop()
 
     app_logger.info("✅ 所有关闭任务已完成。应用已安全退出。")
 
@@ -131,6 +126,13 @@ def create_app() -> FastAPI:
     @app.get("/", tags=["System"], include_in_schema=False)
     async def read_root():
         return {"message": f"欢迎使用 {settings.app.title}!", "docs_url": "/docs"}
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     return app
 
