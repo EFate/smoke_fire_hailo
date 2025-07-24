@@ -1,8 +1,9 @@
-fastapi[standard]
-loguru
-opencv-python
-pydantic-settings
-pyyaml
-streamlit
-typer
+fastapi[standard]>=0.115.12
+loguru>=0.7.3
+opencv-python>=4.11.0.86
+pydantic-settings>=2.9.1
+pyyaml>=6.0.2
+streamlit>=1.46.1
+typer>=0.16.0
 psutil
+degirum
