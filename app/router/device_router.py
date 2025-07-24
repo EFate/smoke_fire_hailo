@@ -1,9 +1,9 @@
 # app/router/device_router.py
-from fastapi import APIRouter, HTTPException, status, Request, Depends
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from typing import List, Optional, TypeVar, Generic
 import asyncio
-from app.cfg.logging import app_logger  # 导入日志模块
+from app.cfg.logging import app_logger
 
 # --- 通用 API 响应模型 ---
 T = TypeVar("T")
@@ -16,19 +16,16 @@ class ApiResponse(BaseModel, Generic[T]):
     data: Optional[T] = Field(None, description="实际的响应数据。")
 
 
-# --- 优化后的 Hailo 设备信息 Schema ---
+# --- Hailo 设备信息 Schema ---
 
 class TemperatureInfo(BaseModel):
     """芯片内部温度传感器的读数。"""
     ts0_celsius: Optional[float] = Field(None, description="温度传感器 TS0 的读数（摄氏度）")
-    ts1_celsius: Optional[float] = Field(None, description="温度传感器 TS1 的读数（摄氏度）")
+    ts1_celsius: Optional[float] = Field(None, description="温度传感器 TS1 的读数（摄-氏度）")
 
 
 class DeviceInfo(BaseModel):
-    """
-    单个 Hailo 设备的详细信息，包含了静态和动态指标。
-    """
-    # 静态信息
+    """单个 Hailo 设备的详细信息，包含了静态和动态指标。"""
     device_id: str = Field(..., description="设备在系统中的唯一标识符 (例如 PCIe 地址)")
     board_name: Optional[str] = Field(None, description="AI 芯片的型号名称")
     serial_number: Optional[str] = Field(None, description="硬件模块的唯一序列号")
@@ -38,8 +35,8 @@ class DeviceInfo(BaseModel):
     nn_core_clock_rate_mhz: Optional[float] = Field(None, description="神经网络核心的运行频率 (MHz)")
     boot_source: Optional[str] = Field(None, description="设备固件的启动来源 (例如 PCIE)")
 
-    # 动态信息
-    average_power_watts: Optional[float] = Field(None, description="当前平均功耗（瓦特）")
+    # --- 字段名称和描述已更新 ---
+    current_power_watts: Optional[float] = Field(None, description="当前瞬时功耗（瓦特）")
     chip_temperature: Optional[TemperatureInfo] = Field(None, description="芯片内部温度（摄氏度）")
 
 
@@ -52,18 +49,15 @@ class GetAllDevicesResponseData(BaseModel):
 router = APIRouter()
 
 
-# --- Hailo 设备信息接口 ---
 @router.get(
     "/device",
     response_model=ApiResponse[GetAllDevicesResponseData],
     summary="获取所有 Hailo 设备的详细信息",
-    description="获取所有连接的 Hailo 设备的静态信息（如型号、序列号）和动态状态（如功耗、温度）。",
+    description="获取所有连接的 Hailo 设备的静态信息（如型号、序列号）和动态状态（如瞬时功耗、温度）。",
     tags=["Hailo设备"]
 )
 async def get_hailo_devices():
-    """
-    返回所有 Hailo 设备的详细信息，包括静态硬件参数和实时动态数据。
-    """
+    """返回所有 Hailo 设备的详细信息，包括静态硬件参数和实时动态数据。"""
     device_list: List[DeviceInfo] = []
     try:
         from hailo_platform import Device, HailoRTException
@@ -78,42 +72,29 @@ async def get_hailo_devices():
             targets = [Device(di) for di in device_infos]
             results = []
 
-            # 为每个设备正确初始化功耗测量
-            # 这对于获取准确的连续读数至关重要。
-            # 注意: 在无状态的API调用中每次都初始化效率不高，但在这种场景下能确保正确性。
-            for target in targets:
-                try:
-                    target.control.stop_power_measurement()
-                    target.control.set_power_measurement()
-                    target.control.start_power_measurement()
-                except HailoRTException as e:
-                    app_logger.warning(f"无法为设备 {target.device_id} 初始化功耗测量: {e}")
-
             for di, target in zip(device_infos, targets):
                 static_info = {}
                 dynamic_info = {}
 
                 try:
-                    # --- 获取详细的静态信息 ---
                     board_info = target.control.identify()
                     extended_info = target.control.get_extended_device_information()
-
                     static_info = {
                         "board_name": board_info.board_name,
                         "serial_number": board_info.serial_number,
                         "part_number": board_info.part_number,
                         "product_name": board_info.product_name,
                         "device_architecture": BoardInformation.get_hw_arch_str(board_info.device_architecture),
-                        "nn_core_clock_rate_mhz": extended_info.neural_network_core_clock_rate / 1_000_000,
+                        "nn_core_clock_rate_mhz": round(extended_info.neural_network_core_clock_rate / 1_000_000, 1),
                         "boot_source": str(extended_info.boot_source).split('.')[-1],
                     }
 
-                    # --- 获取动态信息 ---
-                    power_data = target.control.get_power_measurement()
+                    # 获取当前瞬时功耗
+                    current_power = target.control.power_measurement()  #
                     temp_data = target.control.get_chip_temperature()
 
                     dynamic_info = {
-                        "average_power_watts": power_data.average_value,
+                        "current_power_watts": round(current_power, 3) if current_power is not None else None,
                         "chip_temperature": TemperatureInfo(
                             ts0_celsius=temp_data.ts0_temperature,
                             ts1_celsius=temp_data.ts1_temperature
@@ -125,7 +106,6 @@ async def get_hailo_devices():
                 except Exception as e:
                     app_logger.error(f"获取设备 {di} 信息时发生未知错误: {e}")
 
-                # 组合所有信息并添加到结果列表
                 results.append(
                     DeviceInfo(
                         device_id=str(di),
@@ -134,12 +114,6 @@ async def get_hailo_devices():
                     )
                 )
 
-            # 在函数结束前停止功耗测量，以重新启用过流保护
-            for target in targets:
-                try:
-                    target.control.stop_power_measurement()
-                except HailoRTException:
-                    pass
 
             return results
 
