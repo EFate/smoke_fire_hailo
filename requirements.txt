@@ -11,5 +11,5 @@ scipy>=1.15.3
 streamlit>=1.45.1
 typer>=0.16.0
 psutil
-degirum
-degirum_tools
+# degirum>=0.17.2
+degirum_tools>=0.18.0
