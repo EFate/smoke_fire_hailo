@@ -32,9 +32,8 @@ class AppConfig(BaseModel):
     debug: bool = False
     stream_default_lifetime_minutes: int = Field(10, description="视频流默认生命周期（分钟），-1表示永久")
     stream_cleanup_interval_seconds: int = Field(60, description="后台清理过期视频流的运行间隔（秒）")
-    stream_recognition_interval_seconds: float = Field(0.1, description="视频流中执行检测的最小间隔（秒），即1/FPS")
     stream_max_queue_size: int = Field(120, description="为视频流提供一个更充裕的缓冲区，以应对客户端网络抖动")
-    max_concurrent_pipelines: int = Field(2, ge=1, description="系统支持的最大并发视频流处理路数")
+    max_concurrent_tasks: int = Field(2, ge=1, description="系统支持的最大并发视频流处理路数")
 
 
 class ServerConfig(BaseModel):

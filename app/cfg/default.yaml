@@ -11,7 +11,6 @@ app:
   # 视频流相关配置
   stream_default_lifetime_minutes: 10      # 视频流默认生命周期（分钟），-1表示永不超时
   stream_cleanup_interval_seconds: 60      # 后台清理任务每隔多少秒运行一次
-  stream_recognition_interval_seconds: 0.1 # 每次检测的最小时间间隔（秒）。0.1 对应约 10 FPS。增加此值可降低CPU/GPU负载。
   stream_max_queue_size: 30                # 每个视频流内部帧缓冲区的最大尺寸。如果推理速度跟不上视频源帧率，此队列可防止内存无限增长。
 
 # Uvicorn 服务器配置

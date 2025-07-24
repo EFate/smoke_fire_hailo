@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     # 1. 初始化 DeGirum 模型池。这是一个耗时的I/O和硬件交互任务。
     model_pool = ModelPool(
         settings=settings,
-        pool_size=settings.app.max_concurrent_pipelines
+        pool_size=settings.app.max_concurrent_tasks
     )
     app.state.model_pool = model_pool
 
