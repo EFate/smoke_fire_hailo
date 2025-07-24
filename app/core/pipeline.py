@@ -34,6 +34,8 @@ class VideoStreamPipeline:
         # 线程管理
         self.stop_event = threading.Event()
         self.threads: List[threading.Thread] = []
+        # 新增：用于指示所有线程是否已成功启动的事件
+        self.threads_started_event = threading.Event()
 
         # 连接各个处理阶段的中间队列
         self.preprocess_queue = queue.Queue(maxsize=30)
@@ -63,6 +65,9 @@ class VideoStreamPipeline:
             # 3. 启动所有四个线程
             self._start_threads()
             app_logger.info(f"【流水线 {self.stream_id}】所有工作线程已启动。")
+            # 标记线程已启动
+            self.threads_started_event.set()
+
 
             # 4. 主线程监控工作线程的存活状态
             while not self.stop_event.is_set():
@@ -83,6 +88,9 @@ class VideoStreamPipeline:
             return
         app_logger.warning(f"【流水线 {self.stream_id}】正在停止...")
         self.stop_event.set()
+        # 清除线程已启动事件
+        self.threads_started_event.clear()
+
 
         # 等待所有线程结束
         for t in self.threads:

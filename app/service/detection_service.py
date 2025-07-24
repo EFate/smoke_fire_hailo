@@ -46,9 +46,17 @@ class DetectionService:
             # 在后台任务中运行 pipeline.start()
             asyncio.create_task(asyncio.to_thread(pipeline.start))
 
-            # 短暂等待以确认线程组是否成功启动
-            await asyncio.sleep(1.0)  # 给予更多时间启动
+            # 修改点：等待流水线中的所有线程真正启动
+            # 给予一个合理的超时时间，例如 5 秒
+            try:
+                await asyncio.to_thread(pipeline.threads_started_event.wait, timeout=5.0)
+            except TimeoutError:
+                app_logger.error(f"【流水线 {stream_id}】启动超时，线程未在预期时间内启动。")
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "服务正忙或无法启动处理线程，请稍后再试。")
+
+
             # 修正点：检查线程列表是否为空，以及是否有任何一个线程在运行
+            # 这里的检查现在应该在 threads_started_event.wait 成功后执行
             if not pipeline.threads or not any(t.is_alive() for t in pipeline.threads):
                 raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "服务正忙或无法启动处理线程，请稍后再试。")
 
@@ -89,9 +97,11 @@ class DetectionService:
         try:
             while True:
                 # 修正点：检查是否所有后台线程都已停止
-                if not pipeline.threads or (not any(t.is_alive() for t in pipeline.threads) and frame_queue.empty()):
+                # 额外的检查：如果 stop_event 被设置了，也应该停止推送
+                if pipeline.stop_event.is_set() or (not pipeline.threads or (not any(t.is_alive() for t in pipeline.threads) and frame_queue.empty())):
                     app_logger.info(f"检测到流 {stream_id} 的所有后台线程已停止，正常关闭推送。")
                     break
+
 
                 try:
                     frame_bytes = await asyncio.wait_for(frame_queue.get(), timeout=1.0)
