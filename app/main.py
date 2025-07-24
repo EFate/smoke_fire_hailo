@@ -17,6 +17,7 @@ from app.router.detection_router import router as detection_router
 from app.router.device_router import router as device_router
 from app.schema.detection_schema import ApiResponse
 from app.service.detection_service import DetectionService
+from app.service.device_monitor import device_monitor
 
 settings = get_app_settings()
 setup_logging(settings)
@@ -47,6 +48,9 @@ async def lifespan(app: FastAPI):
     app.state.cleanup_task = cleanup_task
     app_logger.info("✅ 已启动过期视频流的周期性清理任务。")
 
+    # 4. 启动设备监控服务
+    device_monitor.start()
+
     app_logger.info("🎉 应用启动成功，准备接收请求！")
 
     yield
@@ -71,6 +75,9 @@ async def lifespan(app: FastAPI):
     # 3. 释放模型池资源，并强制清理后台进程
     if hasattr(app.state, 'model_pool'):
         app.state.model_pool.dispose()
+
+    # 4. 关闭设备监控服务
+    device_monitor.stop()
 
     app_logger.info("✅ 所有关闭任务已完成。应用已安全退出。")
 
