@@ -29,13 +29,9 @@ logging:
 
 # YOLO 模型与推理配置
 yolo:
-  model_path: "./data/models/best.onnx"
+  model_path: "./data/zoo/yolov8n_relu6_fire_smoke--640x640_quant_hailort_hailo8_1"
   class_names: ["fire", "smoke"] # 类别名称，顺序必须与模型训练时一致
 
-  # ONNX Runtime 执行提供者。程序会从列表中按顺序尝试使用。
-  # 推荐保持 'CUDAExecutionProvider' 在前，'CPUExecutionProvider' 作为备选。
-  # 程序启动时会自动检测环境，如果CUDA不可用，将自动回退到CPU。
-  providers: ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
   confidence_threshold: 0.5 # 只有当检测结果的置信度高于此值时，才被认为是有效的目标
   iou_threshold: 0.4        # 非极大值抑制(NMS)的IoU阈值，用于合并重叠的检测框
