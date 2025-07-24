@@ -3,7 +3,6 @@ import asyncio
 import threading
 import time
 import cv2
-from degirum.predict import DeGirumModel
 
 from app.cfg.config import AppSettings
 from app.cfg.logging import app_logger
@@ -27,7 +26,7 @@ class VideoStreamPipeline:
         self.output_queue = output_queue
         self.model_pool = model_pool  # 持有模型池的引用
 
-        self._model: DeGirumModel | None = None  # 将要从池中借用的模型
+        self._model = None  # 将要从池中借用的模型
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
 
