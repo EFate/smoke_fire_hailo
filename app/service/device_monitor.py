@@ -145,4 +145,4 @@ class DeviceMonitor:
             # 等待指定的时间间隔，或直到停止事件被触发
             self._stop_event.wait(timeout=self.interval)
 
-device_monitor = DetectionService(app_logger, interval=5)
+device_monitor = DeviceMonitor(app_logger, interval=5)
