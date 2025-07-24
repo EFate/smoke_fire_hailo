@@ -19,7 +19,7 @@ LOGS_DIR = BASE_DIR / "logs"
 CONFIG_DIR = BASE_DIR / "app" / "cfg"
 DATA_DIR = BASE_DIR / "data"
 # 新增：定义模型仓库（Zoo）的路径
-MODEL_ZOO_DIR = DATA_DIR / "hailo_zoo"
+MODEL_ZOO_DIR = DATA_DIR / "zoo"
 
 FilePath = Annotated[Path, BeforeValidator(lambda v: Path(v) if isinstance(v, str) else v)]
 
@@ -64,7 +64,7 @@ class HailoConfig(BaseModel):
         description="DeGirum 模型仓库的路径，建议使用本地文件路径以提高加载速度和稳定性。"
     )
     detection_model_name: str = Field(
-        default="yolov8s_smoke_fire_o", # 假设模型名为这个，请根据实际情况修改
+        default="yolov8n_relu6_fire_smoke--640x640_quant_hailort_hailo8_1",
         description="要在模型仓库中加载的烟火检测模型的名称。"
     )
     class_names: List[str] = ["fire", "smoke"]
