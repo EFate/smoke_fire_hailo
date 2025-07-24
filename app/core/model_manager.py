@@ -34,6 +34,8 @@ class ModelPool:
             app_logger.info(f"启动前检测到 {len(self._initial_pids)} 个残留 DeGirum 进程。")
 
             for i in range(pool_size):
+
+
                 app_logger.info(f"正在加载模型实例 {i + 1}/{pool_size}...")
                 model = self._create_degirum_model()
                 self._pool.put(model)
@@ -49,7 +51,7 @@ class ModelPool:
     def _create_degirum_model(self):
         """使用配置中的信息加载单个 DeGirum 模型实例。"""
 
-        # 修正点 1：在 load_model 调用中移除阈值参数
+
         model = dg.load_model(
             model_name=self.settings.hailo.detection_model_name,
             inference_host_address=dg.LOCAL,
