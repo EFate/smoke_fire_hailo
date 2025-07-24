@@ -61,9 +61,10 @@ st.markdown("""
 
 def initialize_session_state():
     """初始化应用所需的会话状态。"""
-    backend_host = os.getenv("UI_HOST", "localhost")
+    backend_host = os.getenv("HOST__IP", "localhost")
+    backend_port = os.getenv("SERVER__PORT", "12020")
     defaults = {
-        "api_url": f"{backend_host}:12020",  # 默认指向后端服务
+        "api_url": f"{backend_host}:{backend_port}",  # 默认指向后端服务
         "api_status": (False, "尚未连接"),
         "active_page": "系统状态",
         "viewing_stream_info": None,

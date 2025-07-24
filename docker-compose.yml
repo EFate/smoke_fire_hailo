@@ -1,38 +1,34 @@
-# docker-compose.yml
+# docker-compose.yml (已修正)
 # 定义服务
 services:
   # 服务的名称
-  smokefire-service:
+  smoke-fire-hailo-service:
     # 构建指令
     build:
-      # 'context'：构建上下文的路径。'.' 表示当前目录（项目根目录）。
+      # 'context'：构建上下文的路径。'.' 表示当前目录（即项目根目录）。
       context: .
       # 'dockerfile'：Dockerfile 的文件名，相对于 context。
       dockerfile: Dockerfile
 
     # 容器名称
-    container_name: smokefire_service
+    container_name: smoke_fire_hailo_service
 
-    # 端口映射: "主机端口:容器端口"
     ports:
-      - "12020:12020"  # FastAPI
-      - "12021:12021"  # Streamlit
+      - "${SERVER__PORT}:${SERVER__PORT}" # FastAPI
+      - "${WEBUI__PORT}:${WEBUI__PORT}" # Streamlit
 
-    # 数据卷挂载: "主机路径:容器路径"
-    # 路径已更新为相对于项目根目录
-#    volumes:
-#      - ./data:/app/data
-#      - ./logs:/app/logs
+    volumes:
+      - /dev:/dev
+      - /lib/firmware:/lib/firmware
+      - /lib/udev/rules.d:/lib/udev/rules.d
+      - /lib/modules:/lib/modules
+    devices:
+      - /dev/hailo0:/dev/hailo0
+    privileged: true
     environment:
-      - UI_HOST=${UI_HOST}
-    # GPU 资源配置
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - HOST__IP=${HOST__IP}
+      - SERVER__PORT=${SERVER__PORT}
+
 
     # 重启策略: 除非手动停止，否则容器总是在退出后重启
     restart: unless-stopped
