@@ -20,7 +20,7 @@ def draw_detections(
         class_names (List[str]): 模型支持的类别名称列表。
     """
     # 定义颜色映射，可以根据需要扩展
-    colors = {"smoke": (200, 200, 200), "fire": (0, 0, 255)}
+    colors = {"smoke": (160, 32, 240), "fire": (0, 0, 255)}
 
     for det in detections:
         # 从结果字典中提取信息
