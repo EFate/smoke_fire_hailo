@@ -14,6 +14,7 @@ from app.cfg.logging import app_logger, setup_logging
 # 核心修改：导入 ModelPool
 from app.core.model_manager import ModelPool
 from app.router.detection_router import router as detection_router
+from app.router.device_router import router as device_router
 from app.schema.detection_schema import ApiResponse
 from app.service.detection_service import DetectionService
 
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
 
     # --- 挂载路由和静态文件 (保持不变) ---
     app.include_router(detection_router, prefix="/api/detection", tags=["烟火检测服务"])
+    app.include_router(device_router, prefix="/api/device", tags=["Hailo设备"])
     STATIC_FILES_DIR = Path(__file__).parent / "static"
     if STATIC_FILES_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_FILES_DIR), name="static")
