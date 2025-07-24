@@ -72,8 +72,14 @@ class ModelPool:
 
     def acquire(self, timeout: float = 2.0) -> Optional[object]:
         """从池中获取一个模型实例。如果池为空，将等待指定时间。"""
+        # 修改点：在尝试获取模型前打印日志
+        current_available = self._pool.qsize()
+        app_logger.info(f"尝试从模型池获取模型... (当前可用: {current_available}/{self.pool_size})")
         try:
-            return self._pool.get(timeout=timeout)
+            model = self._pool.get(timeout=timeout)
+            # 成功获取模型后打印日志
+            app_logger.info(f"成功获取模型。 (当前可用: {self._pool.qsize()}/{self.pool_size})")
+            return model
         except queue.Empty:
             app_logger.error(f"在 {timeout}s 内未能从池中获取可用模型，服务可能过载。")
             return None
@@ -82,6 +88,8 @@ class ModelPool:
         """将一个模型实例归还到池中。"""
         try:
             self._pool.put_nowait(model)
+            # 归还模型后打印日志
+            app_logger.info(f"已归还模型到池中。 (当前可用: {self._pool.qsize()}/{self.pool_size})")
         except queue.Full:
             app_logger.warning("尝试将模型归还到已满的池中，此实例将被丢弃。")
             del model
