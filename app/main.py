@@ -17,7 +17,7 @@ from app.router.detection_router import router as detection_router
 from app.router.device_router import router as device_router
 from app.schema.detection_schema import ApiResponse
 from app.service.detection_service import DetectionService
-from app.service.device_monitor import device_monitor
+from app.service.device_monitor import DeviceMonitor
 
 settings = get_app_settings()
 setup_logging(settings)
@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI):
     app_logger.info("✅ 已启动过期视频流的周期性清理任务。")
 
     # 4. 启动设备监控服务
+    device_monitor = DeviceMonitor()
     device_monitor.start()
 
     app_logger.info("🎉 应用启动成功，准备接收请求！")

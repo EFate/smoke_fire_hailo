@@ -6,13 +6,12 @@ import os
 import threading
 from pathlib import Path
 from ..cfg.logging import app_logger
+from contextlib import redirect_stderr, redirect_stdout
 
 try:
     from hailo_platform import Device, HailoRTException
     from hailo_platform.pyhailort.pyhailort import BoardInformation
 except ImportError:
-    # 在这里不直接退出，而是允许类被导入，在实例化时再处理
-    # 这样主应用即使在没有安装库的环境中也能启动（尽管监控功能会失败）
     BoardInformation = None
     HailoRTException = Exception
     Device = None
@@ -24,19 +23,11 @@ class DeviceMonitor:
     一个独立的后台服务类，用于周期性监控Hailo设备状态并写入文件。
     """
 
-    def __init__(self, logger = app_logger, interval: int = 5):
-        """
-        初始化设备监控服务。
-        Args:
-            logger (Logger): 从主应用传入的日志记录器。
-            interval (int): 监控的时间间隔（秒）。
-        """
+    def __init__(self, logger=app_logger, interval: int = 60):
         self.logger = logger
         self.interval = interval
         self._thread = None
         self._stop_event = threading.Event()
-
-        # 从环境变量获取路径，如果未设置，则使用默认值
         default_output_path = "/data/hailo/hailo_device_status.json"
         self.output_path = Path(os.getenv("DEVICE_INFO_FILE_PATH", default_output_path))
 
@@ -46,12 +37,10 @@ class DeviceMonitor:
             self.logger.warning("设备监控服务已在运行中。")
             return
 
-        # 检查hailo库是否成功导入
         if Device is None:
             self.logger.error("❌ HailoRT库未加载，无法启动设备监控服务。")
             return
 
-        # 启动前确保输出目录存在
         try:
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             self.logger.info(f"监控状态文件将被写入: {self.output_path.absolute()}")
@@ -72,7 +61,7 @@ class DeviceMonitor:
 
         self.logger.info("👋 正在停止 Hailo 设备后台监控服务...")
         self._stop_event.set()
-        self._thread.join(timeout=self.interval + 1)  # 等待线程结束
+        self._thread.join(timeout=self.interval + 1)
         if self._thread.is_alive():
             self.logger.warning("监控线程在超时后仍未结束。")
         else:
@@ -81,7 +70,6 @@ class DeviceMonitor:
 
     def _fetch_device_metrics(self) -> dict:
         """扫描并获取所有Hailo设备的详细指标。"""
-        # (这个函数的内容与您提供的脚本中的 fetch_device_metrics 完全相同)
         device_infos = Device.scan()
         if not device_infos:
             self.logger.warning("未检测到 Hailo 设备。")
@@ -104,7 +92,13 @@ class DeviceMonitor:
                     "nn_core_clock_rate_mhz": round(extended_info.neural_network_core_clock_rate / 1_000_000, 1),
                     "boot_source": str(extended_info.boot_source).split('.')[-1],
                 })
-                current_power = target.control.power_measurement()
+
+                # --- 屏蔽警告 ---
+                # 将标准输出和标准错误临时重定向到/dev/null，以捕获并丢弃C++库打印的警告信息
+                with open(os.devnull, 'w') as f_null:
+                    with redirect_stderr(f_null), redirect_stdout(f_null):
+                        current_power = target.control.power_measurement()
+
                 temp_data = target.control.get_chip_temperature()
                 device_data.update({
                     "current_power_watts": round(current_power, 3) if current_power is not None else None,
@@ -120,7 +114,6 @@ class DeviceMonitor:
 
             results.append(device_data)
 
-        # 在返回前释放设备对象
         for target in targets:
             try:
                 target.release()
@@ -142,7 +135,5 @@ class DeviceMonitor:
             except Exception as e:
                 self.logger.error(f"处理监控数据时发生未知错误: {e}")
 
-            # 等待指定的时间间隔，或直到停止事件被触发
             self._stop_event.wait(timeout=self.interval)
 
-device_monitor = DeviceMonitor(app_logger, interval=5)
