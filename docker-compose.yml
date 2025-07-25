@@ -3,6 +3,7 @@
 services:
   # 服务的名称
   smoke-fire-hailo-service:
+    image: registry.cn-hangzhou.aliyuncs.com/canstack/face-rec-service-hailo:1.0.0
     # 构建指令
     build:
       # 'context'：构建上下文的路径。'.' 表示当前目录（即项目根目录）。
